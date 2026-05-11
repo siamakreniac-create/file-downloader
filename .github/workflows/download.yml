@@ -60,18 +60,38 @@ jobs:
           
           echo "📋 نام اصلی فایل: $RAW_NAME"
 
-      - name: ⬇️ دانلود فایل
+      - name: ⬇️ دانلود فایل (پشتیبانی از redirect‌های پیچیده)
         id: download
         run: |
           RAW_NAME="${{ steps.filename.outputs.raw_name }}"
-          
-          echo "⬇️ در حال دانلود فایل..."
-          curl -L --fail --retry 5 --retry-delay 5 \
+          URL="${{ github.event.inputs.file_url }}"
+
+          # استخراج دامنه برای Referer
+          DOMAIN=$(echo "$URL" | awk -F/ '{printf "%s//%s", $1, $3}')
+
+          echo "⬇️ در حال دانلود فایل با مدیریت redirect..."
+          curl -L --fail --retry 5 --retry-delay 10 \
                --connect-timeout 20 --max-time 1200 \
                -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+               -H "Accept: */*" \
+               -H "Accept-Language: en-US,en;q=0.9" \
+               -H "Referer: $DOMAIN/" \
+               -H "Origin: $DOMAIN" \
+               -c cookies.txt -b cookies.txt \
                -o "$RAW_NAME" \
-               "${{ github.event.inputs.file_url }}"
-          
+               "$URL"
+
+          # اگر خطا داد، با wget تلاش کن (در صورت نصب)
+          if [[ $? -ne 0 ]]; then
+            echo "curl شکست خورد، تلاش با wget..."
+            sudo apt-get install -y -qq wget
+            wget --tries=5 --timeout=1200 \
+                 --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+                 --referer="$DOMAIN/" \
+                 --keep-session-cookies --save-cookies cookies.txt --load-cookies cookies.txt \
+                 -O "$RAW_NAME" "$URL"
+          fi
+
           SIZE=$(stat -c %s "$RAW_NAME" 2>/dev/null || echo "0")
           SIZE_MB=$(( SIZE / 1048576 ))
           echo "✅ دانلود کامل شد: $RAW_NAME (${SIZE_MB}MB)"
@@ -130,7 +150,6 @@ jobs:
           # شمارش تعداد تکه‌ها
           CHUNK_COUNT=$(ls "${ARCHIVE_BASE}.7z."* 2>/dev/null | wc -l)
           
-          # بررسی وجود فایل .7z بدون پسوند (فایل کوچک که فقط یک تکه دارد ولی با پسوند .001 ذخیره شده)
           SINGLE_CHUNK_AS_001=false
           if [[ $CHUNK_COUNT -eq 1 ]] && [[ -f "${ARCHIVE_BASE}.7z.001" ]]; then
             # فقط یک تکه است → تغییر نام به .7z ساده
@@ -140,7 +159,7 @@ jobs:
           elif [[ $CHUNK_COUNT -gt 1 ]]; then
             # چند تکه → ساخت پوشه و انتقال
             FOLDER_NAME="${ARCHIVE_BASE}"
-            # اگر پوشه‌ای با این نام وجود دارد (مثلاً از اجرای قبلی)، یک پسوند اضافه کن
+            # اگر پوشه‌ای با این نام وجود دارد، یک پسوند اضافه کن
             if [[ -d "$FOLDER_NAME" ]]; then
               FOLDER_NAME="${ARCHIVE_BASE}_files"
             fi
